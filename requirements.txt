@@ -1,0 +1,16 @@
+# Whisper Audio Transcriber Dependencies
+# Compatible with Python 3.14
+
+# Core Whisper implementation
+openai-whisper>=20231117
+
+# Audio processing
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Core dependencies
+numpy>=1.21.0
+librosa>=0.10.0  # For audio duration detection
+
+# Optional: for better performance
+# accelerate>=0.20.0  # Uncomment for faster inference
