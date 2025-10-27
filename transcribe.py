@@ -101,10 +101,18 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, use_
         tuple: (transcribed_text, files_to_cleanup)
     """
     # Detect available device
-    device, device_name = get_device()
-    if not use_gpu or device == "cpu":
+    detected_device, detected_device_name = get_device()
+    
+    # Determine final device based on user preference
+    if not use_gpu:
         device = "cpu"
-        device_name = "CPU (forced)" if use_gpu else "CPU"
+        device_name = "CPU (forced by --cpu flag)"
+    elif detected_device == "cpu":
+        device = "cpu"
+        device_name = f"CPU (GPU not available)"
+    else:
+        device = detected_device
+        device_name = detected_device_name
     
     print(f"🔄 Loading Whisper model '{model_size}' on {device_name}...")
     
