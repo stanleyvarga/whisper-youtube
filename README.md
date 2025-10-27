@@ -28,7 +28,7 @@ A high-quality audio transcription script using OpenAI's Whisper model, optimize
 
 2. **Create virtual environment with Python 3.13** (required for compatibility)
    ```bash
-   python3.13 -m venv venv
+   python3 -m venv venv
    ```
 
 3. **Activate virtual environment and install dependencies**
