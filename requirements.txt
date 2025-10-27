@@ -1,8 +1,9 @@
 # Whisper Audio Transcriber Dependencies
 # Compatible with Python 3.14
 
-# Core Whisper implementation
+# Core Whisper implementations
 openai-whisper>=20231117
+faster-whisper>=1.0.0  # Faster implementation using CTranslate2
 
 # Audio processing
 torch>=2.0.0

@@ -87,7 +87,48 @@ python transcribe.py --audio audio.mp3 --output my_transcript.txt
   - Available models: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3`
   - Larger models = better quality but slower processing
 - `--output`: Custom output file path (default: saves to `txt/` folder)
+- `--implementation`: Choose implementation (`whisper` or `faster`, default: `whisper`)
+  - `whisper`: Default OpenAI Whisper implementation
+  - `faster`: faster-whisper (typically 2-4x faster, optimized for CPU)
+- `--benchmark`: Include benchmark data header in transcript output (optional)
 - `--compare-models`: Show model comparison information
+
+## Implementation Comparison
+
+### Two Implementations Available
+
+The script supports two Whisper implementations:
+
+1. **`whisper`** (default): OpenAI's official Whisper implementation
+   - Full-featured with extensive configuration options
+   - Verbose progress output
+   - Slightly slower but more compatible
+
+2. **`faster`**: faster-whisper implementation using CTranslate2
+   - Typically 2-4x faster on CPU
+   - Optimized performance
+   - Lower memory usage
+   - Same model accuracy
+
+### Usage Examples
+
+```bash
+# Use default OpenAI Whisper
+python transcribe.py --audio audio.mp3
+
+# Use faster-whisper for speed
+python transcribe.py --audio audio.mp3 --implementation faster
+
+# Include benchmark data in the output
+python transcribe.py --audio audio.mp3 --benchmark
+
+# Use faster-whisper with benchmarking
+python transcribe.py --audio audio.mp3 --implementation faster --benchmark
+
+# Compare both implementations with benchmarking
+python transcribe.py --audio audio.mp3 --implementation whisper --benchmark
+python transcribe.py --audio audio.mp3 --implementation faster --benchmark
+```
 
 ## Model Information
 
@@ -124,11 +165,45 @@ The script will:
 1. Display the transcription in the terminal with progress indicators
 2. Save the transcription to a `.txt` file in the `txt/` folder (created automatically)
 3. Show processing statistics and performance metrics
+4. Optionally include benchmark data as a header (use `--benchmark` flag)
 
 **File Organization:**
 - Audio files: Keep in your current directory or specify full path
 - Transcripts: Automatically saved to `txt/` folder
 - Example: `audio/podcast.mp3` → `txt/podcast.txt`
+
+**Benchmark Headers (Optional):**
+
+Use the `--benchmark` flag to include detailed benchmark metadata at the top of each transcript file:
+- Generation timestamp
+- Implementation used (whisper or faster-whisper)
+- Model size
+- Audio duration
+- Processing time
+- Real-time speed (e.g., 2.5x real-time)
+- Detected language
+
+Example with `--benchmark`:
+```
+# ============================================================
+# TRANSCRIPTION BENCHMARK DATA
+# ============================================================
+# Generated: 2024-01-15 14:30:45
+# Implementation: faster-whisper
+# Model: large-v3
+# Audio Duration: 5m 23s
+# Processing Time: 2m 5s
+# Speed: 2.58x real-time
+# Detected Language: en
+# ============================================================
+
+[Your transcription text here...]
+```
+
+Without `--benchmark`:
+```
+[Your transcription text here...]
+```
 
 ## Troubleshooting
 

@@ -14,6 +14,11 @@ from pathlib import Path
 try:
     import whisper
     from tqdm import tqdm
+    try:
+        from faster_whisper import WhisperModel
+        FASTER_WHISPER_AVAILABLE = True
+    except ImportError:
+        FASTER_WHISPER_AVAILABLE = False
 except ImportError:
     print("Error: Required packages not installed. Please run: pip install -r requirements.txt")
     sys.exit(1)
@@ -65,7 +70,7 @@ def get_audio_duration(audio_file_path):
         return None
 
 
-def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
+def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, implementation="whisper"):
     """
     Transcribe audio file using Whisper model
     
@@ -73,11 +78,18 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
         audio_file_path (str): Path to the audio file
         model_size (str): Whisper model size (large-v3 for best quality)
         cleanup (bool): Whether to remove audio files after successful transcription
+        implementation (str): Either 'whisper' or 'faster' to choose the implementation
     
     Returns:
         tuple: (transcribed_text, files_to_cleanup)
     """
-    print(f"🔄 Loading Whisper model '{model_size}'...")
+    # Validate implementation choice
+    if implementation == "faster" and not FASTER_WHISPER_AVAILABLE:
+        print("⚠️  faster-whisper not available. Falling back to default whisper implementation.")
+        implementation = "whisper"
+    
+    impl_name = "faster-whisper" if implementation == "faster" else "whisper"
+    print(f"🔄 Using {impl_name} implementation with model '{model_size}'...")
     
     # Sanitize the filename for easier handling
     original_path = Path(audio_file_path)
@@ -132,8 +144,12 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
         print(f"⚠️  Could not check/convert file format: {e}")
         print("Proceeding with original file...")
     
-    # Initialize Whisper model
-    model = whisper.load_model(model_size)
+    # Initialize Whisper model based on implementation
+    if implementation == "faster":
+        print(f"⚡ Using faster-whisper with model '{model_size}'...")
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    else:
+        model = whisper.load_model(model_size)
     
     # Get audio duration for progress estimation
     duration = get_audio_duration(actual_audio_path)
@@ -148,36 +164,122 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
     
     start_time = time.time()
     
-    # Transcribe the audio with optimized settings
-    result = model.transcribe(
-        audio_file_path,
-        language="en",  # English only for better accuracy
-        fp16=False,     # Use fp32 for better compatibility
-        verbose=True,    # Enable verbose output for progress
-        word_timestamps=False,  # Disable word timestamps for speed
-        temperature=0.0,  # Use deterministic sampling for consistency
-        compression_ratio_threshold=2.4,  # Skip audio that's likely not speech
-        logprob_threshold=-1.0,  # Skip segments with low confidence
-        no_speech_threshold=0.6  # Skip segments likely to be silence
-    )
+    # Transcribe the audio based on implementation
+    if implementation == "faster":
+        # Use faster-whisper implementation
+        segments, info = model.transcribe(
+            actual_audio_path,
+            language="en",
+            beam_size=5,
+            word_timestamps=False,
+            temperature=0.0
+        )
+        
+        # Collect the transcription text
+        transcription_parts = []
+        for segment in segments:
+            transcription_parts.append(segment.text)
+        result_text = " ".join(transcription_parts).strip()
+        
+        detected_language = info.language
+        
+    else:
+        # Use default whisper implementation
+        result = model.transcribe(
+            actual_audio_path,
+            language="en",  # English only for better accuracy
+            fp16=False,     # Use fp32 for better compatibility
+            verbose=True,    # Enable verbose output for progress
+            word_timestamps=False,  # Disable word timestamps for speed
+            temperature=0.0,  # Use deterministic sampling for consistency
+            compression_ratio_threshold=2.4,  # Skip audio that's likely not speech
+            logprob_threshold=-1.0,  # Skip segments with low confidence
+            no_speech_threshold=0.6  # Skip segments likely to be silence
+        )
+        result_text = result["text"].strip()
+        detected_language = result['language']
     
     end_time = time.time()
     processing_time = end_time - start_time
     
-    print("-" * 50)
-    print(f"✅ Detected language: {result['language']}")
-    print(f"⏱️  Processing time: {int(processing_time//60)}m {int(processing_time%60)}s")
+    # Format processing time
+    processing_time_str = f"{int(processing_time//60)}m {int(processing_time%60)}s"
     
+    print("-" * 50)
+    print(f"✅ Detected language: {detected_language}")
+    print(f"⏱️  Processing time: {processing_time_str}")
+    
+    speed_ratio = None
+    speed_ratio_str = None
     if duration:
         speed_ratio = duration / processing_time
-        print(f"🚀 Processing speed: {speed_ratio:.1f}x real-time")
+        speed_ratio_str = f"{speed_ratio:.1f}x"
+        print(f"🚀 Processing speed: {speed_ratio_str} real-time")
     
-    return result["text"].strip(), files_to_cleanup
+    # Prepare benchmark data
+    benchmark_data = {
+        'timestamp': None,  # Will be set in main()
+        'implementation': impl_name,
+        'model': model_size,
+        'audio_duration': f"{int(duration//60)}m {int(duration%60)}s" if duration else None,
+        'processing_time': processing_time_str,
+        'speed_ratio': speed_ratio_str,
+        'detected_language': detected_language,
+        'processing_time_seconds': processing_time
+    }
+    
+    return result_text, files_to_cleanup, benchmark_data
 
 
-def save_transcription(text, output_path):
-    """Save transcription to text file"""
+def format_benchmark_header(benchmark_data):
+    """
+    Format benchmark data as a header comment for the transcript
+    
+    Args:
+        benchmark_data (dict): Dictionary containing benchmark information
+    
+    Returns:
+        str: Formatted benchmark header
+    """
+    from datetime import datetime
+    
+    header = "# " + "="*60 + "\n"
+    header += "# TRANSCRIPTION BENCHMARK DATA\n"
+    header += "# " + "="*60 + "\n"
+    header += f"# Generated: {benchmark_data.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}\n"
+    header += f"# Implementation: {benchmark_data.get('implementation', 'unknown')}\n"
+    header += f"# Model: {benchmark_data.get('model', 'unknown')}\n"
+    
+    if benchmark_data.get('audio_duration'):
+        header += f"# Audio Duration: {benchmark_data['audio_duration']}\n"
+    
+    if benchmark_data.get('processing_time'):
+        header += f"# Processing Time: {benchmark_data['processing_time']}\n"
+    
+    if benchmark_data.get('speed_ratio'):
+        header += f"# Speed: {benchmark_data['speed_ratio']}x real-time\n"
+    
+    if benchmark_data.get('detected_language'):
+        header += f"# Detected Language: {benchmark_data['detected_language']}\n"
+    
+    header += "# " + "="*60 + "\n\n"
+    
+    return header
+
+
+def save_transcription(text, output_path, benchmark_data=None):
+    """
+    Save transcription to text file with optional benchmark header
+    
+    Args:
+        text (str): Transcription text
+        output_path (str): Path to save the file
+        benchmark_data (dict): Optional benchmark data to include as header
+    """
     with open(output_path, 'w', encoding='utf-8') as f:
+        if benchmark_data:
+            header = format_benchmark_header(benchmark_data)
+            f.write(header)
         f.write(text)
     print(f"Transcription saved to: {output_path}")
 
@@ -390,6 +492,8 @@ Examples:
   python transcribe.py --audio podcast.m4a --model medium
   python transcribe.py --audio audio.mp3 --output custom.txt
   python transcribe.py --audio audio.mp3 --cleanup
+  python transcribe.py --audio audio.mp3 --benchmark
+  python transcribe.py --audio audio.mp3 --implementation faster --benchmark
   python transcribe.py --youtube "https://youtube.com/watch?v=VIDEO_ID" --model small --cleanup
   python transcribe.py --compare-models
 
@@ -431,6 +535,19 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     parser.add_argument(
         "--youtube",
         help="YouTube video URL to download and transcribe (downloads audio automatically)"
+    )
+    
+    parser.add_argument(
+        "--implementation",
+        default="whisper",
+        choices=["whisper", "faster"],
+        help="Choose implementation: 'whisper' (default OpenAI) or 'faster' (faster-whisper)"
+    )
+    
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Include benchmark data header in the transcript output"
     )
     
     args = parser.parse_args()
@@ -483,11 +600,21 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     
     try:
         # Transcribe the audio
-        transcription, files_to_cleanup = transcribe_audio(str(audio_path), args.model, args.cleanup)
+        transcription, files_to_cleanup, benchmark_data = transcribe_audio(
+            str(audio_path), 
+            args.model, 
+            args.cleanup,
+            args.implementation
+        )
         
         if not transcription:
             print("Warning: No transcription generated. The audio might be too short or contain no speech.")
             return
+        
+        # Add timestamp to benchmark data if benchmarking is enabled
+        if args.benchmark:
+            from datetime import datetime
+            benchmark_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # Display transcription
         print("\n" + "="*60)
@@ -496,8 +623,9 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         print(transcription)
         print("="*60)
         
-        # Save to file
-        save_transcription(transcription, str(output_path))
+        # Save to file with optional benchmark data
+        benchmark_data_to_save = benchmark_data if args.benchmark else None
+        save_transcription(transcription, str(output_path), benchmark_data_to_save)
         
         # Play completion sound
         play_completion_sound()
