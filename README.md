@@ -42,6 +42,32 @@ A high-quality audio transcription script using OpenAI's Whisper model, optimize
    chmod +x transcribe.py
    ```
 
+### GPU Acceleration (Optional - AMD/NVIDIA)
+
+For GPU acceleration on supported hardware:
+
+**For AMD GPUs (Linux/ROCm):**
+1. Install ROCm 5.7+ following [AMD's official guide](https://rocm.docs.amd.com/)
+2. Install PyTorch with ROCm support:
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm5.7
+   ```
+3. Verify GPU detection:
+   ```python
+   import torch
+   print(torch.cuda.is_available())  # Should return True
+   print(torch.cuda.get_device_name(0))  # Should display your GPU model
+   ```
+
+**For NVIDIA GPUs (CUDA):**
+1. Install PyTorch with CUDA support:
+   ```bash
+   pip install torch torchvision torchaudio
+   ```
+2. GPU acceleration will be automatically detected
+
+GPU acceleration provides 5-10x speedup on supported hardware.
+
 ## Usage
 
 ### Basic Usage
@@ -87,6 +113,8 @@ python transcribe.py --audio audio.mp3 --output my_transcript.txt
   - Available models: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3`
   - Larger models = better quality but slower processing
 - `--output`: Custom output file path (default: saves to `txt/` folder)
+- `--gpu`: Use GPU acceleration if available (default: enabled)
+- `--cpu`: Force CPU usage even if GPU is available
 - `--compare-models`: Show model comparison information
 
 ## Model Information

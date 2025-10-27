@@ -48,6 +48,28 @@ def sanitize_filename(filename):
     return sanitized
 
 
+def get_device():
+    """
+    Detect and return the best available device for inference.
+    Returns device type ('cuda' or 'cpu') and device name.
+    
+    Returns:
+        tuple: (device, device_name) where device is 'cuda' or 'cpu'
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+            try:
+                device_name = torch.cuda.get_device_name(0)
+            except Exception:
+                device_name = "GPU (unknown)"
+            return device, device_name
+        return "cpu", "CPU"
+    except Exception:
+        return "cpu", "CPU"
+
+
 def get_audio_duration(audio_file_path):
     """Get audio file duration in seconds"""
     try:
@@ -65,7 +87,7 @@ def get_audio_duration(audio_file_path):
         return None
 
 
-def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
+def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, use_gpu=True):
     """
     Transcribe audio file using Whisper model
     
@@ -73,11 +95,18 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
         audio_file_path (str): Path to the audio file
         model_size (str): Whisper model size (large-v3 for best quality)
         cleanup (bool): Whether to remove audio files after successful transcription
+        use_gpu (bool): Whether to use GPU acceleration if available (default: True)
     
     Returns:
         tuple: (transcribed_text, files_to_cleanup)
     """
-    print(f"🔄 Loading Whisper model '{model_size}'...")
+    # Detect available device
+    device, device_name = get_device()
+    if not use_gpu or device == "cpu":
+        device = "cpu"
+        device_name = "CPU (forced)" if use_gpu else "CPU"
+    
+    print(f"🔄 Loading Whisper model '{model_size}' on {device_name}...")
     
     # Sanitize the filename for easier handling
     original_path = Path(audio_file_path)
@@ -135,6 +164,20 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
     # Initialize Whisper model
     model = whisper.load_model(model_size)
     
+    # Move model to GPU if available
+    if device == "cuda":
+        try:
+            import torch
+            model = model.to(device)
+            print(f"✅ Model loaded on GPU: {device_name}")
+        except Exception as e:
+            print(f"⚠️  Could not load model on GPU: {e}")
+            print(f"✅ Model loaded on CPU")
+            device = "cpu"
+            device_name = "CPU (fallback)"
+    else:
+        print(f"✅ Model loaded on CPU")
+    
     # Get audio duration for progress estimation
     duration = get_audio_duration(actual_audio_path)
     if duration:
@@ -148,11 +191,14 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False):
     
     start_time = time.time()
     
+    # Set fp16 based on device (GPU can use fp16 for better performance)
+    use_fp16 = (device == "cuda")
+    
     # Transcribe the audio with optimized settings
     result = model.transcribe(
         audio_file_path,
         language="en",  # English only for better accuracy
-        fp16=False,     # Use fp32 for better compatibility
+        fp16=use_fp16,     # Enable fp16 on GPU, use fp32 on CPU
         verbose=True,    # Enable verbose output for progress
         word_timestamps=False,  # Disable word timestamps for speed
         temperature=0.0,  # Use deterministic sampling for consistency
@@ -390,6 +436,8 @@ Examples:
   python transcribe.py --audio podcast.m4a --model medium
   python transcribe.py --audio audio.mp3 --output custom.txt
   python transcribe.py --audio audio.mp3 --cleanup
+  python transcribe.py --audio audio.mp3 --gpu
+  python transcribe.py --audio audio.mp3 --cpu
   python transcribe.py --youtube "https://youtube.com/watch?v=VIDEO_ID" --model small --cleanup
   python transcribe.py --compare-models
 
@@ -431,6 +479,19 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     parser.add_argument(
         "--youtube",
         help="YouTube video URL to download and transcribe (downloads audio automatically)"
+    )
+    
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        default=True,
+        help="Use GPU acceleration if available (default: enabled)"
+    )
+    
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available"
     )
     
     args = parser.parse_args()
@@ -482,8 +543,16 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         output_path = txt_folder / sanitized_name
     
     try:
+        # Determine GPU usage preference
+        use_gpu = not args.cpu  # Use GPU unless --cpu flag is set
+        
         # Transcribe the audio
-        transcription, files_to_cleanup = transcribe_audio(str(audio_path), args.model, args.cleanup)
+        transcription, files_to_cleanup = transcribe_audio(
+            str(audio_path), 
+            args.model, 
+            args.cleanup,
+            use_gpu=use_gpu
+        )
         
         if not transcription:
             print("Warning: No transcription generated. The audio might be too short or contain no speech.")
