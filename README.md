@@ -87,6 +87,8 @@ python transcribe.py --audio audio.mp3 --output my_transcript.txt
   - Available models: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3`
   - Larger models = better quality but slower processing
 - `--output`: Custom output file path (default: saves to `txt/` folder)
+- `--youtube`: YouTube URL to download audio and transcribe
+- `--subtitles`: YouTube URL to download subtitles directly (fast, no transcription needed)
 - `--implementation`: Choose implementation (`whisper` or `faster`, default: `whisper`)
   - `whisper`: Default OpenAI Whisper implementation
   - `faster`: faster-whisper (typically 2-4x faster, optimized for CPU)
@@ -118,6 +120,9 @@ python transcribe.py --audio audio.mp3
 
 # Use faster-whisper for speed
 python transcribe.py --audio audio.mp3 --implementation faster
+
+# Download YouTube subtitles (instant, no transcription)
+python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID"
 
 # Include benchmark data in the output
 python transcribe.py --audio audio.mp3 --benchmark

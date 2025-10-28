@@ -360,6 +360,66 @@ def play_completion_sound():
         print("🎵 Completion sound failed, but transcription was successful!")
 
 
+def download_youtube_subtitles(url, output_dir="txt"):
+    """
+    Download subtitles from YouTube video using yt-dlp
+    
+    Args:
+        url (str): YouTube video URL
+        output_dir (str): Directory to save the subtitle file
+        
+    Returns:
+        str: Path to the downloaded subtitle file
+    """
+    import subprocess
+    
+    print(f"📥 Downloading subtitles from YouTube: {url}")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Use yt-dlp to download subtitles
+    cmd = [
+        'yt-dlp',
+        '--write-sub',
+        '--write-auto-sub',  # Also try auto-generated subtitles if manual aren't available
+        '--sub-lang', 'en',  # Prioritize English subtitles
+        '--sub-format', 'vtt',  # Use VTT format (we'll convert to plain text)
+        '--skip-download',  # Don't download video/audio
+        '--output', f'{output_dir}/%(title)s.%(ext)s',
+        url
+    ]
+    
+    try:
+        print("🔄 Starting subtitle download...")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        # Look for downloaded subtitle files
+        import glob
+        subtitle_files = glob.glob(f"{output_dir}/*.vtt")
+        
+        if not subtitle_files:
+            # Try to find any subtitle files
+            subtitle_files = glob.glob(f"{output_dir}/*.*")
+            subtitle_files = [f for f in subtitle_files if Path(f).suffix in ['.vtt', '.srt', '.txt', '.srv1', '.srv2', '.srv3']]
+        
+        if subtitle_files:
+            # Get the most recently modified subtitle file
+            downloaded_file = max(subtitle_files, key=os.path.getmtime)
+            print(f"✅ Subtitle download complete: {os.path.basename(downloaded_file)}")
+            return downloaded_file
+        else:
+            raise Exception("Could not locate downloaded subtitle file")
+            
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Subtitle download failed: {e}")
+        print(f"Error output: {e.stderr}")
+        raise Exception(f"YouTube subtitle download failed: {e.stderr}")
+    except Exception as e:
+        print(f"❌ Subtitle download error: {e}")
+        raise
+
+
 def download_youtube_audio(url, output_dir="audio"):
     """
     Download audio from YouTube video using yt-dlp
@@ -495,6 +555,7 @@ Examples:
   python transcribe.py --audio audio.mp3 --benchmark
   python transcribe.py --audio audio.mp3 --implementation faster --benchmark
   python transcribe.py --youtube "https://youtube.com/watch?v=VIDEO_ID" --model small --cleanup
+  python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID"
   python transcribe.py --compare-models
 
 Note: Audio files are automatically renamed to lowercase with hyphens instead of spaces.
@@ -538,6 +599,11 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     )
     
     parser.add_argument(
+        "--subtitles",
+        help="YouTube video URL to download subtitles directly (no transcription needed)"
+    )
+    
+    parser.add_argument(
         "--implementation",
         default="whisper",
         choices=["whisper", "faster"],
@@ -557,8 +623,57 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         show_model_comparison()
         return
     
+    # Handle YouTube subtitles download if URL provided
+    if args.subtitles:
+        if args.audio or args.youtube:
+            print("Error: Cannot specify --subtitles with --audio or --youtube. Choose one.")
+            sys.exit(1)
+        
+        try:
+            # Download subtitles from YouTube
+            subtitles_path_str = download_youtube_subtitles(args.subtitles)
+            subtitles_path = Path(subtitles_path_str)
+            print(f"📁 Downloaded subtitles: {subtitles_path}")
+            
+            # Convert VTT to plain text if needed
+            if subtitles_path.suffix == '.vtt':
+                # Simple VTT to text conversion
+                with open(subtitles_path, 'r', encoding='utf-8') as f:
+                    vtt_content = f.read()
+                
+                # Simple regex to extract text from VTT
+                import re
+                # Remove VTT timestamps and metadata
+                text_lines = []
+                for line in vtt_content.split('\n'):
+                    line = line.strip()
+                    # Skip metadata and timestamps
+                    if line and not line.startswith('WEBVTT') and not '-->' in line and not line.startswith('NOTE'):
+                        if not re.match(r'^\d+$', line):  # Skip cue numbers
+                            text_lines.append(line)
+                
+                text_content = '\n'.join(text_lines).strip()
+                
+                # Save as .txt
+                txt_path = subtitles_path.with_suffix('.txt')
+                with open(txt_path, 'w', encoding='utf-8') as f:
+                    f.write(text_content)
+                
+                print(f"✅ Converted subtitles to plain text: {txt_path}")
+                print("\n" + "="*60)
+                print("📝 SUBTITLES DOWNLOAD COMPLETE")
+                print("="*60)
+                print(text_content[:500] + "..." if len(text_content) > 500 else text_content)
+                print("="*60)
+                
+            return
+            
+        except Exception as e:
+            print(f"Error downloading YouTube subtitles: {e}")
+            sys.exit(1)
+    
     # Handle YouTube download if URL provided
-    if args.youtube:
+    elif args.youtube:
         if args.audio:
             print("Error: Cannot specify both --audio and --youtube. Choose one.")
             sys.exit(1)
@@ -574,7 +689,7 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     else:
         # Validate input file
         if not args.audio:
-            print("Error: Must specify either --audio or --youtube")
+            print("Error: Must specify either --audio, --youtube, or --subtitles")
             sys.exit(1)
             
         audio_path = Path(args.audio)
