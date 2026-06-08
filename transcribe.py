@@ -246,7 +246,8 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, impl
             temperature=0.0,  # Use deterministic sampling for consistency
             compression_ratio_threshold=2.4,  # Skip audio that's likely not speech
             logprob_threshold=-1.0,  # Skip segments with low confidence
-            no_speech_threshold=0.6  # Skip segments likely to be silence
+            no_speech_threshold=0.6,  # Skip segments likely to be silence
+            condition_on_previous_text=False,  # Avoid repetition loops on music/intros
         )
         
         if with_word_timestamps and 'segments' in result:
