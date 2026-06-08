@@ -1,0 +1,8 @@
+./transcribe.sh --txt \
+  "https://www.youtube.com/watch?v=ORWSmbG1rGk" \
+  "https://www.youtube.com/watch?v=mSuI_hPWCxo" \
+  "https://www.youtube.com/watch?v=zj4SxFhHz_A" \
+  "https://youtu.be/3gMG8U2r_S0" \
+  "https://www.youtube.com/watch?v=sca_pmURzrU" \
+  "https://youtu.be/tiKHKJUWL5A" \
+  --subtitles-dir txt/hogwarts-legacy
