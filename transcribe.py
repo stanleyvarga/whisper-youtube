@@ -70,7 +70,23 @@ def get_audio_duration(audio_file_path):
         return None
 
 
-def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, implementation="whisper"):
+def format_timestamp(seconds):
+    """
+    Format seconds to [HH:MM:SS.mmm] format
+    
+    Args:
+        seconds (float): Time in seconds
+    
+    Returns:
+        str: Formatted timestamp string
+    """
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"[{hours:02d}:{minutes:02d}:{secs:06.3f}]"
+
+
+def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, implementation="whisper", language="en", with_word_timestamps=False):
     """
     Transcribe audio file using Whisper model
     
@@ -79,9 +95,11 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, impl
         model_size (str): Whisper model size (large-v3 for best quality)
         cleanup (bool): Whether to remove audio files after successful transcription
         implementation (str): Either 'whisper' or 'faster' to choose the implementation
+        language (str): Target language code (default: 'en' for English)
+        with_word_timestamps (bool): Whether to include word-level timestamps in output
     
     Returns:
-        tuple: (transcribed_text, files_to_cleanup)
+        tuple: (transcribed_text, files_to_cleanup, benchmark_data)
     """
     # Validate implementation choice
     if implementation == "faster" and not FASTER_WHISPER_AVAILABLE:
@@ -169,17 +187,35 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, impl
         # Use faster-whisper implementation
         segments, info = model.transcribe(
             actual_audio_path,
-            language="en",
+            language=language,
             beam_size=5,
-            word_timestamps=False,
+            word_timestamps=with_word_timestamps,
             temperature=0.0
         )
         
         # Collect the transcription text
-        transcription_parts = []
-        for segment in segments:
-            transcription_parts.append(segment.text)
-        result_text = " ".join(transcription_parts).strip()
+        if with_word_timestamps:
+            # Format with word timestamps
+            transcription_parts = []
+            for segment in segments:
+                if hasattr(segment, 'words') and segment.words:
+                    # Format each word with its timestamp
+                    word_parts = []
+                    for word in segment.words:
+                        timestamp = format_timestamp(word.start)
+                        word_text = word.word.strip()
+                        word_parts.append(f"{timestamp} {word_text}")
+                    transcription_parts.append(" ".join(word_parts))
+                else:
+                    # Fallback to segment text if word timestamps not available
+                    transcription_parts.append(segment.text)
+            result_text = "\n".join(transcription_parts).strip()
+        else:
+            # Standard transcription without timestamps
+            transcription_parts = []
+            for segment in segments:
+                transcription_parts.append(segment.text)
+            result_text = " ".join(transcription_parts).strip()
         
         detected_language = info.language
         
@@ -187,16 +223,36 @@ def transcribe_audio(audio_file_path, model_size="large-v3", cleanup=False, impl
         # Use default whisper implementation
         result = model.transcribe(
             actual_audio_path,
-            language="en",  # English only for better accuracy
+            language=language,  # Target language for transcription
             fp16=False,     # Use fp32 for better compatibility
             verbose=True,    # Enable verbose output for progress
-            word_timestamps=False,  # Disable word timestamps for speed
+            word_timestamps=with_word_timestamps,  # Enable word timestamps if requested
             temperature=0.0,  # Use deterministic sampling for consistency
             compression_ratio_threshold=2.4,  # Skip audio that's likely not speech
             logprob_threshold=-1.0,  # Skip segments with low confidence
             no_speech_threshold=0.6  # Skip segments likely to be silence
         )
-        result_text = result["text"].strip()
+        
+        if with_word_timestamps and 'segments' in result:
+            # Format with word timestamps
+            transcription_parts = []
+            for segment in result['segments']:
+                if 'words' in segment and segment['words']:
+                    # Format each word with its timestamp
+                    word_parts = []
+                    for word in segment['words']:
+                        timestamp = format_timestamp(word['start'])
+                        word_text = word['word'].strip()
+                        word_parts.append(f"{timestamp} {word_text}")
+                    transcription_parts.append(" ".join(word_parts))
+                else:
+                    # Fallback to segment text if word timestamps not available
+                    transcription_parts.append(segment['text'])
+            result_text = "\n".join(transcription_parts).strip()
+        else:
+            # Standard transcription without timestamps
+            result_text = result["text"].strip()
+        
         detected_language = result['language']
     
     end_time = time.time()
@@ -301,6 +357,46 @@ def cleanup_files(files_to_cleanup):
             print(f"❌ Failed to remove {file_path}: {e}")
 
 
+def copy_to_clipboard(text):
+    """
+    Copy text to system clipboard.
+    Works on macOS (pbcopy), Linux (xclip/xsel), and Windows (clip).
+    
+    Args:
+        text (str): Text to copy to clipboard
+    """
+    import subprocess
+    import platform
+    
+    system = platform.system().lower()
+    
+    try:
+        if system == "darwin":  # macOS
+            subprocess.run(['pbcopy'], input=text, text=True, check=True)
+            return True
+        elif system == "linux":
+            # Try xclip first, then xsel
+            try:
+                subprocess.run(['xclip', '-selection', 'clipboard'], input=text, text=True, check=True)
+                return True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                try:
+                    subprocess.run(['xsel', '--clipboard', '--input'], input=text, text=True, check=True)
+                    return True
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    print("⚠️  No clipboard utility found. Install xclip or xsel.")
+                    return False
+        elif system == "windows":
+            subprocess.run(['clip'], input=text, text=True, check=True)
+            return True
+        else:
+            print(f"⚠️  Unsupported operating system: {system}")
+            return False
+    except Exception as e:
+        print(f"⚠️  Could not copy to clipboard: {e}")
+        return False
+
+
 def play_completion_sound():
     """
     Play a completion sound from the utils/effects folder.
@@ -372,13 +468,31 @@ def download_youtube_subtitles(url, output_dir="txt"):
         str: Path to the downloaded subtitle file
     """
     import subprocess
+    import re
+    import glob
     
     print(f"📥 Downloading subtitles from YouTube: {url}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Use yt-dlp to download subtitles
+    # Extract video ID from URL to ensure unique filenames
+    video_id = None
+    video_id_match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
+    if video_id_match:
+        video_id = video_id_match.group(1)
+        print(f"Video ID: {video_id}")
+    
+    # Use video ID in filename to prevent cache conflicts
+    if video_id:
+        output_template = f'{output_dir}/%(title)s-[{video_id}].%(ext)s'
+    else:
+        output_template = f'{output_dir}/%(title)s.%(ext)s'
+    
+    # Get list of files BEFORE downloading to identify newly created files
+    files_before_download = set(glob.glob(f"{output_dir}/*"))
+    
+    # Use yt-dlp to download subtitles with aggressive cache-busting options
     cmd = [
         'yt-dlp',
         '--write-sub',
@@ -386,7 +500,10 @@ def download_youtube_subtitles(url, output_dir="txt"):
         '--sub-lang', 'en',  # Prioritize English subtitles
         '--sub-format', 'vtt',  # Use VTT format (we'll convert to plain text)
         '--skip-download',  # Don't download video/audio
-        '--output', f'{output_dir}/%(title)s.%(ext)s',
+        '--force-overwrites',  # Force overwrite existing files
+        '--no-cache-dir',  # Don't use yt-dlp cache
+        '--no-part',  # Don't use .part files
+        '--output', output_template,
         url
     ]
     
@@ -394,22 +511,70 @@ def download_youtube_subtitles(url, output_dir="txt"):
         print("🔄 Starting subtitle download...")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
-        # Look for downloaded subtitle files
-        import glob
-        subtitle_files = glob.glob(f"{output_dir}/*.vtt")
+        # Check if the output indicates no subtitles available
+        output_combined = result.stdout + result.stderr
+        if 'There are no subtitles' in output_combined or ('has no' in output_combined and 'subtitle' in output_combined):
+            print("❌ The video has no subtitles available!")
+            raise Exception("The video has no subtitles available for the requested language.")
         
-        if not subtitle_files:
-            # Try to find any subtitle files
-            subtitle_files = glob.glob(f"{output_dir}/*.*")
-            subtitle_files = [f for f in subtitle_files if Path(f).suffix in ['.vtt', '.srt', '.txt', '.srv1', '.srv2', '.srv3']]
+        # Parse yt-dlp output to find the exact subtitle file that was written
+        downloaded_file = None
+        output_lines = result.stdout.split('\n') + result.stderr.split('\n')
         
-        if subtitle_files:
-            # Get the most recently modified subtitle file
-            downloaded_file = max(subtitle_files, key=os.path.getmtime)
-            print(f"✅ Subtitle download complete: {os.path.basename(downloaded_file)}")
-            return downloaded_file
-        else:
-            raise Exception("Could not locate downloaded subtitle file")
+        # Look for lines indicating subtitle file was written
+        for line in output_lines:
+            # Look for patterns like "[write subtitle file] filename.vtt" or "Writing video subtitles to: filename.vtt"
+            if '.vtt' in line.lower() and ('write' in line.lower() or 'writing' in line.lower() or 'subtitle' in line.lower()):
+                # Extract filename from the line
+                # Try to find file path in the line
+                potential_paths = re.findall(r'[^\s]+\.vtt', line)
+                for path in potential_paths:
+                    # Clean up the path (remove brackets, quotes, etc.)
+                    clean_path = path.strip('[]()"\'').strip()
+                    if os.path.exists(clean_path):
+                        downloaded_file = clean_path
+                        break
+                    # Also try with output_dir prefix
+                    if not os.path.isabs(clean_path):
+                        full_path = os.path.join(output_dir, clean_path)
+                        if os.path.exists(full_path):
+                            downloaded_file = full_path
+                            break
+                if downloaded_file:
+                    break
+        
+        # Fallback: Look for files that were created/modified AFTER the download started
+        if not downloaded_file:
+            # Get files after download
+            files_after_download = set(glob.glob(f"{output_dir}/*"))
+            
+            # Find newly created files (excluding subdirectories to be safe)
+            new_files = [f for f in (files_after_download - files_before_download) if os.path.isfile(f)]
+            
+            # Filter for .vtt files specifically
+            vtt_files = [f for f in new_files if f.endswith('.vtt')]
+            
+            if vtt_files:
+                # If we have new .vtt files, use the first one
+                downloaded_file = vtt_files[0]
+                print(f"✅ Found newly downloaded file: {os.path.basename(downloaded_file)}")
+            elif video_id:
+                # Look for files with the video ID in the name (second priority)
+                # More careful pattern matching to find files with [VIDEO_ID] in the name
+                for f in files_after_download:
+                    if os.path.isfile(f) and f"[{video_id}]" in f and f.endswith('.vtt'):
+                        downloaded_file = f
+                        print(f"✅ Found file with video ID: {os.path.basename(downloaded_file)}")
+                        break
+        
+        if not downloaded_file:
+            raise Exception("Could not locate downloaded subtitle file - the video may not have subtitles available")
+        
+        if not os.path.exists(downloaded_file):
+            raise Exception(f"Subtitle file was not created: {downloaded_file}")
+            
+        print(f"✅ Subtitle download complete: {os.path.basename(downloaded_file)}")
+        return downloaded_file
             
     except subprocess.CalledProcessError as e:
         print(f"❌ Subtitle download failed: {e}")
@@ -554,8 +719,12 @@ Examples:
   python transcribe.py --audio audio.mp3 --cleanup
   python transcribe.py --audio audio.mp3 --benchmark
   python transcribe.py --audio audio.mp3 --implementation faster --benchmark
+  python transcribe.py --audio audio.mp3 --with-word-timestamps
+  python transcribe.py --audio audio.mp3 --implementation faster --with-word-timestamps
   python transcribe.py --youtube "https://youtube.com/watch?v=VIDEO_ID" --model small --cleanup
   python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID"
+  python transcribe.py --txt "https://youtube.com/watch?v=VIDEO_ID"
+  python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID" --copy
   python transcribe.py --compare-models
 
 Note: Audio files are automatically renamed to lowercase with hyphens instead of spaces.
@@ -600,7 +769,19 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     
     parser.add_argument(
         "--subtitles",
-        help="YouTube video URL to download subtitles directly (no transcription needed)"
+        nargs='+',
+        help="One or more YouTube URLs to download subtitles (no transcription needed)"
+    )
+    
+    parser.add_argument(
+        "--txt",
+        nargs='+',
+        help="One or more YouTube URLs to download subtitles as TXT only (no VTT saved)"
+    )
+    
+    parser.add_argument(
+        "--subtitles-dir",
+        help="Output directory for downloaded subtitle .txt files (default: txt/)"
     )
     
     parser.add_argument(
@@ -616,6 +797,24 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         help="Include benchmark data header in the transcript output"
     )
     
+    parser.add_argument(
+        "--copy",
+        action="store_true",
+        help="Copy subtitle text to clipboard (works with --subtitles and --txt)"
+    )
+    
+    parser.add_argument(
+        "--language",
+        default="en",
+        help="Target language for transcription (e.g., 'en' for English, 'sk' for Slovak, default: 'en')"
+    )
+    
+    parser.add_argument(
+        "--with-word-timestamps",
+        action="store_true",
+        help="Include word-level timestamps in the transcription output (format: [HH:MM:SS.mmm] word)"
+    )
+    
     args = parser.parse_args()
     
     # Show model comparison if requested
@@ -623,54 +822,158 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         show_model_comparison()
         return
     
-    # Handle YouTube subtitles download if URL provided
-    if args.subtitles:
+    # Validate --copy flag usage
+    if args.copy and not (args.subtitles or args.txt):
+        print("Error: --copy flag can only be used with --subtitles or --txt")
+        sys.exit(1)
+    
+    # Handle YouTube subtitles download if URL provided (supports multiple URLs)
+    if args.subtitles or args.txt:
         if args.audio or args.youtube:
-            print("Error: Cannot specify --subtitles with --audio or --youtube. Choose one.")
+            print("Error: Cannot specify --subtitles/--txt with --audio or --youtube. Choose one.")
             sys.exit(1)
         
-        try:
-            # Download subtitles from YouTube
-            subtitles_path_str = download_youtube_subtitles(args.subtitles)
-            subtitles_path = Path(subtitles_path_str)
-            print(f"📁 Downloaded subtitles: {subtitles_path}")
-            
-            # Convert VTT to plain text if needed
-            if subtitles_path.suffix == '.vtt':
-                # Simple VTT to text conversion
-                with open(subtitles_path, 'r', encoding='utf-8') as f:
-                    vtt_content = f.read()
+        # Determine URLs and mode
+        urls = args.txt if args.txt else args.subtitles
+        if isinstance(urls, str):
+            urls = [urls]
+        txt_only = bool(args.txt)  # Only save VTT if using --subtitles
+        
+        # Output directory for all subtitle outputs
+        subtitles_dir = args.subtitles_dir if args.subtitles_dir else "txt"
+        os.makedirs(subtitles_dir, exist_ok=True)
+        
+        # Process each URL
+        any_error = False
+        for url in urls:
+            try:
+                # Download subtitles from YouTube to the target directory
+                subtitles_path_str = download_youtube_subtitles(url, output_dir=subtitles_dir)
+                subtitles_path = Path(subtitles_path_str)
+                print(f"📁 Downloaded subtitles: {subtitles_path}")
                 
-                # Simple regex to extract text from VTT
-                import re
-                # Remove VTT timestamps and metadata
-                text_lines = []
-                for line in vtt_content.split('\n'):
-                    line = line.strip()
-                    # Skip metadata and timestamps
-                    if line and not line.startswith('WEBVTT') and not '-->' in line and not line.startswith('NOTE'):
-                        if not re.match(r'^\d+$', line):  # Skip cue numbers
+                # Convert VTT to plain text if needed
+                if subtitles_path.suffix == '.vtt':
+                    # Improved VTT to text conversion
+                    with open(subtitles_path, 'r', encoding='utf-8') as f:
+                        vtt_content = f.read()
+                    
+                    import re
+                    
+                    # Remove all HTML/XML tags and timestamps
+                    text = re.sub(r'<\d{2}:\d{2}:\d{2}\.\d{3}>', '', vtt_content)
+                    text = re.sub(r'<c>', '', text)
+                    text = re.sub(r'</c>', '', text)
+                    
+                    # Parse VTT structure
+                    text_lines = []
+                    last_text = ""
+                    for line in text.split('\n'):
+                        line = line.strip()
+                        if line.startswith('WEBVTT') or line.startswith('Kind:') or line.startswith('Language:'):
+                            continue
+                        if '-->' in line or re.match(r'^\d+:\d+:\d+', line):
+                            continue
+                        if re.match(r'^\d+$', line):
+                            continue
+                        if not line:
+                            continue
+                        if line != last_text:
                             text_lines.append(line)
-                
-                text_content = '\n'.join(text_lines).strip()
-                
-                # Save as .txt
-                txt_path = subtitles_path.with_suffix('.txt')
-                with open(txt_path, 'w', encoding='utf-8') as f:
-                    f.write(text_content)
-                
-                print(f"✅ Converted subtitles to plain text: {txt_path}")
-                print("\n" + "="*60)
-                print("📝 SUBTITLES DOWNLOAD COMPLETE")
-                print("="*60)
-                print(text_content[:500] + "..." if len(text_content) > 500 else text_content)
-                print("="*60)
-                
-            return
-            
-        except Exception as e:
-            print(f"Error downloading YouTube subtitles: {e}")
+                            last_text = line
+                    
+                    # Simple approach: join all lines with single space
+                    text_content = ' '.join([l for l in text_lines if l.strip()])
+                    text_content = re.sub(r' +', ' ', text_content)
+                    
+                    # Save as .txt (in the same target directory)
+                    txt_path = subtitles_path.with_suffix('.txt')
+                    with open(txt_path, 'w', encoding='utf-8') as f:
+                        f.write(text_content)
+                    
+                    print(f"✅ Converted subtitles to plain text: {txt_path}")
+                    
+                    # If --txt flag, delete the VTT file to save space
+                    if txt_only:
+                        try:
+                            subtitles_path.unlink()
+                            print(f"🗑️  Deleted VTT file (--txt only mode)")
+                        except Exception as e:
+                            print(f"⚠️  Could not delete VTT file: {e}")
+                    
+                    # Copy to clipboard if --copy flag is set
+                    if args.copy:
+                        if copy_to_clipboard(text_content):
+                            print(f"📋 Copied subtitle text to clipboard ({len(text_content)} characters)")
+                        else:
+                            print("⚠️  Failed to copy to clipboard, but subtitle text is available above")
+                    
+                    print("\n" + "="*60)
+                    print("📝 SUBTITLES DOWNLOAD COMPLETE")
+                    print("="*60)
+                    print(text_content[:500] + "..." if len(text_content) > 500 else text_content)
+                    print("="*60)
+            except Exception as e:
+                error_msg = str(e)
+                # If no subtitles available, offer to transcribe the video instead
+                if "no subtitles" in error_msg.lower():
+                    print("\n" + "="*60)
+                    print("⚠️  NO SUBTITLES AVAILABLE")
+                    print("="*60)
+                    print(f"The video has no subtitles, but we can transcribe it instead!")
+                    print("🔄 Downloading video and transcribing with faster-whisper...")
+                    print("="*60 + "\n")
+                    
+                    try:
+                        # Download audio from YouTube
+                        audio_path_str = download_youtube_audio(url)
+                        audio_path = Path(audio_path_str)
+                        
+                        # Transcribe using faster implementation by default
+                        transcription, files_to_cleanup, benchmark_data = transcribe_audio(
+                            str(audio_path),
+                            model_size="base",  # Use smaller model for faster transcription
+                            cleanup=True,  # Clean up the downloaded audio
+                            implementation="faster",  # Use faster-whisper by default
+                            language=args.language if hasattr(args, 'language') else "en",
+                            with_word_timestamps=False
+                        )
+                        
+                        if transcription:
+                            # Save transcription to file
+                            sanitized_name = sanitize_filename(audio_path.stem) + '.txt'
+                            output_path = Path(subtitles_dir) / sanitized_name
+                            save_transcription(transcription, str(output_path))
+                            
+                            # Copy to clipboard if requested
+                            if args.copy:
+                                if copy_to_clipboard(transcription):
+                                    print(f"📋 Copied transcription to clipboard ({len(transcription)} characters)")
+                                else:
+                                    print("⚠️  Failed to copy to clipboard, but transcription is saved")
+                            
+                            # Display transcription
+                            print("\n" + "="*60)
+                            print("📝 TRANSCRIPTION COMPLETE (from video, no subtitles)")
+                            print("="*60)
+                            print(transcription[:500] + "..." if len(transcription) > 500 else transcription)
+                            print("="*60)
+                            
+                            # Play completion sound
+                            play_completion_sound()
+                        else:
+                            print("⚠️  No transcription generated. The audio might be too short or contain no speech.")
+                            any_error = True
+                    except Exception as transcribe_error:
+                        print(f"❌ Transcription failed: {transcribe_error}")
+                        any_error = True
+                else:
+                    any_error = True
+                    print(f"Error downloading YouTube subtitles for {url}: {e}")
+                continue
+        if any_error:
             sys.exit(1)
+        return
     
     # Handle YouTube download if URL provided
     elif args.youtube:
@@ -719,7 +1022,9 @@ YouTube videos are downloaded in best quality MP3 format automatically.
             str(audio_path), 
             args.model, 
             args.cleanup,
-            args.implementation
+            args.implementation,
+            args.language,
+            args.with_word_timestamps
         )
         
         if not transcription:

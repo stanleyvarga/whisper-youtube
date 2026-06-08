@@ -21,7 +21,7 @@ if [ ! -f "transcribe.py" ]; then
 fi
 
 # Check if any of the arguments are special commands
-if [[ "$*" == *"--help"* ]] || [[ "$*" == *"-h"* ]] || [[ "$*" == *"--compare-models"* ]] || [[ "$*" == *"--audio"* ]] || [[ "$*" == *"--youtube"* ]] || [[ "$*" == *"--subtitles"* ]]; then
+if [[ "$*" == *"--help"* ]] || [[ "$*" == *"-h"* ]] || [[ "$*" == *"--compare-models"* ]] || [[ "$*" == *"--audio"* ]] || [[ "$*" == *"--youtube"* ]] || [[ "$*" == *"--subtitles"* ]] || [[ "$*" == *"--txt"* ]]; then
     # Run the transcription script with all arguments passed through
     python transcribe.py "$@"
 else

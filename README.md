@@ -81,11 +81,11 @@ python transcribe.py --audio audio.mp3 --output my_transcript.txt
 ```
 
 ### Command Line Options
-
+****
 - `--audio`: Path to the audio file to transcribe (required)
 - `--model`: Whisper model size (default: `large-v3`)
   - Available models: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3`
-  - Larger models = better quality but slower processing
+  - Larger models = better quality but **slower** processing
 - `--output`: Custom output file path (default: saves to `txt/` folder)
 - `--youtube`: YouTube URL to download audio and transcribe
 - `--subtitles`: YouTube URL to download subtitles directly (fast, no transcription needed)
@@ -93,6 +93,7 @@ python transcribe.py --audio audio.mp3 --output my_transcript.txt
   - `whisper`: Default OpenAI Whisper implementation
   - `faster`: faster-whisper (typically 2-4x faster, optimized for CPU)
 - `--benchmark`: Include benchmark data header in transcript output (optional)
+- `--with-word-timestamps`: Include word-level timestamps in transcription (format: `[HH:MM:SS.mmm] word`)
 - `--compare-models`: Show model comparison information
 
 ## Implementation Comparison
@@ -129,6 +130,12 @@ python transcribe.py --audio audio.mp3 --benchmark
 
 # Use faster-whisper with benchmarking
 python transcribe.py --audio audio.mp3 --implementation faster --benchmark
+
+# Include word-level timestamps for precise word timing
+python transcribe.py --audio audio.mp3 --with-word-timestamps
+
+# Combine word timestamps with faster-whisper for speed
+python transcribe.py --audio audio.mp3 --implementation faster --with-word-timestamps
 
 # Compare both implementations with benchmarking
 python transcribe.py --audio audio.mp3 --implementation whisper --benchmark
@@ -171,6 +178,21 @@ The script will:
 2. Save the transcription to a `.txt` file in the `txt/` folder (created automatically)
 3. Show processing statistics and performance metrics
 4. Optionally include benchmark data as a header (use `--benchmark` flag)
+5. Optionally include word-level timestamps (use `--with-word-timestamps` flag)
+
+**Word Timestamps Format:**
+
+When using `--with-word-timestamps`, each word in the transcription will be prefixed with its timestamp in `[HH:MM:SS.mmm]` format:
+
+```
+[00:00:01.234] Hello [00:00:01.456] world [00:00:01.678] this [00:00:01.890] is [00:00:02.012] a [00:00:02.134] test
+```
+
+This allows you to pinpoint exactly when each word was spoken in the audio, making it useful for:
+- Creating precise subtitles
+- Finding specific moments in audio
+- Analyzing speech patterns
+- Building searchable transcripts with time references
 
 **File Organization:**
 - Audio files: Keep in your current directory or specify full path
