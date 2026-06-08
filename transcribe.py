@@ -11,9 +11,12 @@ import sys
 import time
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_TXT_DIR = PROJECT_ROOT / "txt"
+DEFAULT_AUDIO_DIR = PROJECT_ROOT / "audio"
+
 try:
     import whisper
-    from tqdm import tqdm
     try:
         from faster_whisper import WhisperModel
         FASTER_WHISPER_AVAILABLE = True
@@ -22,6 +25,19 @@ try:
 except ImportError:
     print("Error: Required packages not installed. Please run: pip install -r requirements.txt")
     sys.exit(1)
+
+
+def ensure_external_tools_on_path():
+    """Prepend common install locations so ffmpeg/yt-dlp work with minimal PATH."""
+    import shutil
+
+    if shutil.which("ffmpeg"):
+        return
+
+    for candidate in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if os.access(os.path.join(candidate, "ffmpeg"), os.X_OK):
+            os.environ["PATH"] = f"{candidate}{os.pathsep}{os.environ.get('PATH', '')}"
+            return
 
 
 def sanitize_filename(filename):
@@ -402,7 +418,7 @@ def play_completion_sound():
     Play a completion sound from the utils/effects folder.
     Looks for audio files starting with [use] and plays the first one found.
     """
-    effects_dir = Path("utils/effects")
+    effects_dir = PROJECT_ROOT / "utils/effects"
     
     if not effects_dir.exists():
         print("🎵 No effects folder found, skipping completion sound")
@@ -456,7 +472,7 @@ def play_completion_sound():
         print("🎵 Completion sound failed, but transcription was successful!")
 
 
-def download_youtube_subtitles(url, output_dir="txt"):
+def download_youtube_subtitles(url, output_dir=None):
     """
     Download subtitles from YouTube video using yt-dlp
     
@@ -471,16 +487,17 @@ def download_youtube_subtitles(url, output_dir="txt"):
     import re
     import glob
     
+    if output_dir is None:
+        output_dir = str(DEFAULT_TXT_DIR)
+    
     print(f"📥 Downloading subtitles from YouTube: {url}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
     # Extract video ID from URL to ensure unique filenames
-    video_id = None
-    video_id_match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
-    if video_id_match:
-        video_id = video_id_match.group(1)
+    video_id = extract_youtube_video_id(url)
+    if video_id:
         print(f"Video ID: {video_id}")
     
     # Use video ID in filename to prevent cache conflicts
@@ -585,7 +602,13 @@ def download_youtube_subtitles(url, output_dir="txt"):
         raise
 
 
-def download_youtube_audio(url, output_dir="audio"):
+def extract_youtube_video_id(url):
+    """Extract YouTube video ID from a URL, or return None."""
+    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})', url)
+    return match.group(1) if match else None
+
+
+def download_youtube_audio(url, output_dir=None):
     """
     Download audio from YouTube video using yt-dlp
     
@@ -597,12 +620,24 @@ def download_youtube_audio(url, output_dir="audio"):
         str: Path to the downloaded audio file
     """
     import subprocess
-    import tempfile
+    import glob
+    
+    if output_dir is None:
+        output_dir = str(DEFAULT_AUDIO_DIR)
     
     print(f"📥 Downloading audio from YouTube: {url}")
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
+    
+    video_id = extract_youtube_video_id(url)
+    if video_id:
+        print(f"Video ID: {video_id}")
+        output_template = f'{output_dir}/%(title)s-[{video_id}].%(ext)s'
+    else:
+        output_template = f'{output_dir}/%(title)s.%(ext)s'
+    
+    files_before_download = set(glob.glob(f"{output_dir}/*"))
     
     # Use yt-dlp to download audio in best quality
     cmd = [
@@ -610,7 +645,7 @@ def download_youtube_audio(url, output_dir="audio"):
         '--extract-audio',
         '--audio-format', 'mp3',
         '--audio-quality', '0',  # Best quality
-        '--output', f'{output_dir}/%(title)s.%(ext)s',
+        '--output', output_template,
         '--no-playlist',  # Only download single video, not playlist
         url
     ]
@@ -619,15 +654,27 @@ def download_youtube_audio(url, output_dir="audio"):
         print("🔄 Starting download...")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
-        # Find the downloaded file - use the most reliable method
+        # Find the downloaded file - prefer newly created files with video ID
         downloaded_file = None
+        files_after_download = set(glob.glob(f"{output_dir}/*"))
+        new_files = [
+            f for f in (files_after_download - files_before_download)
+            if os.path.isfile(f) and f.endswith('.mp3')
+        ]
         
-        # Method 1: Look for .mp3 files in output directory (most reliable)
-        import glob
-        mp3_files = glob.glob(f"{output_dir}/*.mp3")
-        if mp3_files:
-            # Get the most recently modified file
-            downloaded_file = max(mp3_files, key=os.path.getmtime)
+        if new_files:
+            downloaded_file = new_files[0]
+        elif video_id:
+            for f in files_after_download:
+                if os.path.isfile(f) and f.endswith('.mp3') and f"[{video_id}]" in f:
+                    downloaded_file = f
+                    break
+        
+        # Fallback: most recently modified mp3 in output directory
+        if not downloaded_file:
+            mp3_files = glob.glob(f"{output_dir}/*.mp3")
+            if mp3_files:
+                downloaded_file = max(mp3_files, key=os.path.getmtime)
         
         # Method 2: Try to parse from yt-dlp output as backup
         if not downloaded_file:
@@ -703,10 +750,12 @@ def show_model_comparison():
     print("• For general use: base or small")
     print("• For high quality: medium")
     print("• For best accuracy: large-v3")
-    print("\n📖 See MODEL_COMPARISON.md for detailed information")
+    print("\n📖 See README.md for detailed model guidance")
 
 
 def main():
+    ensure_external_tools_on_path()
+
     parser = argparse.ArgumentParser(
         description="Transcribe audio files using OpenAI's Whisper model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -725,6 +774,7 @@ Examples:
   python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID"
   python transcribe.py --txt "https://youtube.com/watch?v=VIDEO_ID"
   python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID" --copy
+  python transcribe.py --subtitles "https://youtube.com/watch?v=VIDEO_ID" --fallback-model small
   python transcribe.py --compare-models
 
 Note: Audio files are automatically renamed to lowercase with hyphens instead of spaces.
@@ -743,6 +793,13 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         default="large-v3",
         choices=["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"],
         help="Whisper model size (default: large-v3 for best quality)"
+    )
+    
+    parser.add_argument(
+        "--fallback-model",
+        default="base",
+        choices=["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"],
+        help="Model for subtitle fallback transcription (default: base)"
     )
     
     parser.add_argument(
@@ -840,7 +897,7 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         txt_only = bool(args.txt)  # Only save VTT if using --subtitles
         
         # Output directory for all subtitle outputs
-        subtitles_dir = args.subtitles_dir if args.subtitles_dir else "txt"
+        subtitles_dir = args.subtitles_dir if args.subtitles_dir else str(DEFAULT_TXT_DIR)
         os.makedirs(subtitles_dir, exist_ok=True)
         
         # Process each URL
@@ -932,10 +989,10 @@ YouTube videos are downloaded in best quality MP3 format automatically.
                         # Transcribe using faster implementation by default
                         transcription, files_to_cleanup, benchmark_data = transcribe_audio(
                             str(audio_path),
-                            model_size="base",  # Use smaller model for faster transcription
-                            cleanup=True,  # Clean up the downloaded audio
-                            implementation="faster",  # Use faster-whisper by default
-                            language=args.language if hasattr(args, 'language') else "en",
+                            model_size=args.fallback_model,
+                            cleanup=True,
+                            implementation="faster",
+                            language=args.language,
                             with_word_timestamps=False
                         )
                         
@@ -1005,7 +1062,7 @@ YouTube videos are downloaded in best quality MP3 format automatically.
             sys.exit(1)
     
     # Create txt folder if it doesn't exist
-    txt_folder = Path("txt")
+    txt_folder = DEFAULT_TXT_DIR
     txt_folder.mkdir(exist_ok=True)
     
     # Determine output path

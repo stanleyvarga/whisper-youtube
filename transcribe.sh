@@ -1,31 +1,48 @@
 #!/bin/bash
 # Activation script for Whisper Audio Transcriber
-# This script activates the virtual environment and runs the transcription script
+# Resolves symlinks so this works when installed via ~/.dotfiles/bin or ~/bin
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "Error: Virtual environment not found. Please run setup first:"
-    echo "python3.13 -m venv venv"
-    echo "source venv/bin/activate"
-    echo "pip install -r requirements.txt"
+resolve_script_dir() {
+    local source="${BASH_SOURCE[0]}"
+    while [ -L "$source" ]; do
+        local dir
+        dir="$(cd -P "$(dirname "$source")" && pwd)"
+        source="$(readlink "$source")"
+        [[ "$source" != /* ]] && source="$dir/$source"
+    done
+    cd -P "$(dirname "$source")" && pwd
+}
+
+PROJECT_DIR="$(resolve_script_dir)"
+
+# GUI apps and minimal shells often omit Homebrew; Whisper needs ffmpeg on PATH
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    if [ -d "$brew_bin" ] && [[ ":$PATH:" != *":$brew_bin:"* ]]; then
+        PATH="$brew_bin:$PATH"
+    fi
+done
+export PATH
+
+if [ ! -d "$PROJECT_DIR/venv" ]; then
+    echo "Error: Virtual environment not found at $PROJECT_DIR/venv"
+    echo "Run setup first:"
+    echo "  cd $PROJECT_DIR"
+    echo "  python3 -m venv venv"
+    echo "  source venv/bin/activate"
+    echo "  pip install -r requirements.txt"
     exit 1
 fi
 
-# Activate virtual environment
-source venv/bin/activate
-
-# Check if transcribe.py exists
-if [ ! -f "transcribe.py" ]; then
-    echo "Error: transcribe.py not found in current directory"
+if [ ! -f "$PROJECT_DIR/transcribe.py" ]; then
+    echo "Error: transcribe.py not found in $PROJECT_DIR"
     exit 1
 fi
 
-# Check if any of the arguments are special commands
+# shellcheck source=/dev/null
+source "$PROJECT_DIR/venv/bin/activate"
+
 if [[ "$*" == *"--help"* ]] || [[ "$*" == *"-h"* ]] || [[ "$*" == *"--compare-models"* ]] || [[ "$*" == *"--audio"* ]] || [[ "$*" == *"--youtube"* ]] || [[ "$*" == *"--subtitles"* ]] || [[ "$*" == *"--txt"* ]]; then
-    # Run the transcription script with all arguments passed through
-    python transcribe.py "$@"
+    exec python "$PROJECT_DIR/transcribe.py" "$@"
 else
-    # If no special commands, assume first argument is an audio file path
-    # and add --audio parameter, properly handling all arguments
-    python transcribe.py --audio "$1" "${@:2}"
+    exec python "$PROJECT_DIR/transcribe.py" --audio "$1" "${@:2}"
 fi
