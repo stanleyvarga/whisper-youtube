@@ -473,13 +473,14 @@ def play_completion_sound():
         print("🎵 Completion sound failed, but transcription was successful!")
 
 
-def download_youtube_subtitles(url, output_dir=None):
+def download_youtube_subtitles(url, output_dir=None, language="en"):
     """
     Download subtitles from YouTube video using yt-dlp
     
     Args:
         url (str): YouTube video URL
         output_dir (str): Directory to save the subtitle file
+        language (str): Subtitle language code for yt-dlp --sub-lang (default: en)
         
     Returns:
         str: Path to the downloaded subtitle file
@@ -515,7 +516,7 @@ def download_youtube_subtitles(url, output_dir=None):
         'yt-dlp',
         '--write-sub',
         '--write-auto-sub',  # Also try auto-generated subtitles if manual aren't available
-        '--sub-lang', 'en',  # Prioritize English subtitles
+        '--sub-lang', language,
         '--sub-format', 'vtt',  # Use VTT format (we'll convert to plain text)
         '--skip-download',  # Don't download video/audio
         '--force-overwrites',  # Force overwrite existing files
@@ -864,7 +865,7 @@ YouTube videos are downloaded in best quality MP3 format automatically.
     parser.add_argument(
         "--language",
         default="en",
-        help="Target language for transcription (e.g., 'en' for English, 'sk' for Slovak, default: 'en')"
+        help="Language code for Whisper and for YouTube subtitle download (e.g. en, cs, sk; default: en)",
     )
     
     parser.add_argument(
@@ -906,7 +907,11 @@ YouTube videos are downloaded in best quality MP3 format automatically.
         for url in urls:
             try:
                 # Download subtitles from YouTube to the target directory
-                subtitles_path_str = download_youtube_subtitles(url, output_dir=subtitles_dir)
+                subtitles_path_str = download_youtube_subtitles(
+                    url,
+                    output_dir=subtitles_dir,
+                    language=args.language,
+                )
                 subtitles_path = Path(subtitles_path_str)
                 print(f"📁 Downloaded subtitles: {subtitles_path}")
                 
