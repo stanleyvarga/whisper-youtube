@@ -61,6 +61,9 @@ ln -sf "$PWD/transcribe.sh" ~/bin/transcribe
 # YouTube subtitles as TXT only (no .vtt kept)
 ./transcribe.sh --txt "https://www.youtube.com/watch?v=VIDEO_ID"
 
+# Non-English YouTube captions as TXT only
+./transcribe.sh --txt "https://www.youtube.com/watch?v=umnTAiMUodk" --language cs
+
 # Download YouTube audio and transcribe with Whisper
 ./transcribe.sh --youtube "https://www.youtube.com/watch?v=VIDEO_ID"
 
@@ -118,7 +121,7 @@ Run `./transcribe.sh --help` for the full list. Modes are **mutually exclusive**
 | `--model SIZE` | Whisper model (default: `large-v3`). Choices: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` |
 | `--fallback-model SIZE` | Model used when subtitle download fails and transcription runs instead (default: `base`) |
 | `--implementation IMPL` | `whisper` (default) or `faster` (2–4× faster on CPU) |
-| `--language CODE` | Target language ISO code (default: `en`) |
+| `--language CODE` | Language for Whisper and for YouTube `--subtitles` / `--txt` caption download (default: `en`) |
 | `--output PATH` | Custom output file path for local/`--youtube` transcription |
 | `--cleanup` | Delete source and converted audio files after successful transcription |
 | `--benchmark` | Add a metadata header to the output `.txt` file |
@@ -136,6 +139,9 @@ Run `./transcribe.sh --help` for the full list. Modes are **mutually exclusive**
 
 # Subtitle fallback with a higher-quality model
 ./transcribe.sh --subtitles "URL" --fallback-model small
+
+# Czech auto-captions to txt/ (no .vtt kept)
+./transcribe.sh --txt "https://www.youtube.com/watch?v=umnTAiMUodk" --language cs
 
 # Word timestamps with faster-whisper
 ./transcribe.sh lecture.mp3 --implementation faster --with-word-timestamps
